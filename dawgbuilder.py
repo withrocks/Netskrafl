@@ -751,6 +751,7 @@ class DawgBuilder:
         """ Write the DAWG to a text output file with extension '.text.dawg' """
         assert self._dawg is not None
         fname = os.path.abspath(os.path.join(relpath, output + u".text.dawg"))
+        print("Writing DAWG to '{}'".format(fname))
         with codecs.open(fname, mode='w', encoding='utf-8') as fout:
             self._dawg.write_text(fout)
 
