@@ -36,10 +36,21 @@ class Collation:
             letter[1]: letter[0] for letter in enumerate(collation)}
 
     def strcoll(self, a, b):
+        # TODO: Optimize
         for pair in izip(a, b):
             delta = self.coll_dict[pair[0]] - \
                     self.coll_dict[pair[1]]
             if delta != 0:
                 return delta
-        return 0
+
+        # The prefix of length min(a, b) is equal, then they must be equal
+        # or the longer one comes after the shorter one
+        len_a = len(a)
+        len_b = len(b)
+        if len_a == len_b:
+            return 0
+        elif len_a > len_b:
+            return 1
+        else:
+            return -1
 
