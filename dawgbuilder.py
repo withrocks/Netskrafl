@@ -846,13 +846,14 @@ def run_skrafl():
     print(u"Starting DAWG build for skraflhjalp/netskrafl.appspot.com")
     db = DawgBuilder()
     t0 = time.time()
+    localeid = "isl" if sys.platform.startswith("win32") else "is_IS.utf8"
     # "isl"/"is_IS" specifies Icelandic locale collation (sorting) order -
     # modify this for other languages
     db.build(
         ["ordalistimax15.sorted.txt", "ordalisti.add.txt"], # Input files to be merged
         "ordalisti", # Output file - full name will be ordalisti.text.dawg
         "resources", # Subfolder of input and output files
-        "isl" if sys.platform.startswith("win32") else "is_IS", # See comment above
+        localeid, # See comment above
         filter_skrafl, # Word filter function to apply
         "ordalisti.remove.txt" # Words to remove
     )
@@ -885,7 +886,7 @@ def run_skrafl():
         ["ordalisti.algeng.sorted.txt"], # Input files to be merged
         "algeng", # Output file - full name will be algeng.text.dawg
         "resources", # Subfolder of input and output files
-        "isl" if sys.platform.startswith("win32") else "is_IS",
+        localeid,
         filter_common # Word filter function to apply
     )
     t1 = time.time()
