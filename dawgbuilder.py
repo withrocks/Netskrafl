@@ -104,10 +104,11 @@ import codecs
 import binascii
 import struct
 import io
+import argparse
 
 from dawgdictionary import DawgDictionary
 from languages import Alphabet
-from collation_svc import CollationSvc
+from collation_svc import CollationSvc, LocaleNotAvailableException
 
 
 MAXLEN = 48 # Longest possible word to be processed
@@ -840,7 +841,7 @@ def run_twl06():
     print("Build took {0:.2f} seconds".format(t1 - t0))
 
 
-def run_skrafl():
+def run_skrafl(collation):
     """ Build a DAWG from the files listed """
     # This creates a DAWG from the full database of Icelandic words in
     # 'Beygingarlýsing íslensks nútímamáls' (BIN), except abbreviations,
@@ -853,8 +854,7 @@ def run_skrafl():
     # "is_IS" specifies Icelandic locale collation (sorting) order -
     # modify this for other languages.
     # Note that the locale must be installed on the machine for other locales.
-    collation_svc = CollationSvc("is_IS")
-    db = DawgBuilder(collation_svc)
+    db = DawgBuilder(collation)
     t0 = time.time()
 
     db.build(
@@ -887,7 +887,7 @@ def run_skrafl():
 
     print(u"Starting DAWG build for list of common words")
 
-    db = DawgBuilder(collation_svc)
+    db = DawgBuilder(collation)
     t0 = time.time()
     db.build(
         ["ordalisti.algeng.sorted.txt"], # Input files to be merged
@@ -916,7 +916,26 @@ def run_skrafl():
     print("DAWG builder run complete")
 
 
+def parse_arguments():
+    # Currently only supports switching the locale
+    parser = argparse.ArgumentParser(description='DAWG dictionary builder')
+    parser.add_argument('--localeid',
+                        dest='localeid',
+                        default='is_IS',
+                        help='Locale to use for sorting. Format: <lang>_<country>[.<encoding>]')
+    args = parser.parse_args()
+    return args
+
 if __name__ == '__main__':
     # Build the whole Icelandic Netskrafl word database by default
-    run_skrafl()
+    args = parse_arguments()
+    try:
+        collation = CollationSvc(args.localeid)
+    except LocaleNotAvailableException:
+        print("The locale '{}' is not available".format(args.localeid))
+        print("Please run again with <program> --localeid <localeid>")
+        print("If available, you can find <localeid> by running `locale -a`")
+        sys.exit(1)
+
+    run_skrafl(collation)
 
