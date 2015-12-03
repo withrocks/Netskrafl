@@ -108,7 +108,7 @@ import argparse
 
 from dawgdictionary import DawgDictionary
 from languages import Alphabet
-from collation_svc import CollationSvc, LocaleNotAvailableException
+from locale_helper import CollationSvc, LocaleNotAvailableException
 
 
 MAXLEN = 48 # Longest possible word to be processed
