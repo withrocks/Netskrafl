@@ -1,0 +1,56 @@
+# Temporary file, will be removed after locale issue has been resolved.
+
+Running on OS X, on fix-branch:
+$ md5 ./resources/*
+MD5 (./resources/Netskrafl.psd) = 14375a8227e7a51f3f8d3b5f8b8b01d4
+MD5 (./resources/NetskraflFacebookBanner.psd) = 182eb13e3041f3b837b907bd61b166bc
+MD5 (./resources/NetskraflFacebookCover.psd) = e93ddae8eb341f2cf81679bf7767c510
+MD5 (./resources/NetskraflFacebookCoverLarge.psd) = 36073cd515ea3239bf5434aa4c146c7d
+MD5 (./resources/NetskraflFacebookImage.psd) = e490daa65ed9d2604192b26acc406626
+MD5 (./resources/NetskraflFacebookImageSq.psd) = a9ebf2e1348fb89713a4b05fadf83f5d
+MD5 (./resources/NewBag.pptx) = 6ec9b227b87f7b051e0a2c43f261ab42
+MD5 (./resources/algeng.dawg.pickle) = 0faffc78a790eaa7ae9f61bc735da158
+MD5 (./resources/algeng.text-fix-locale-issue.dawg) = f8e70e42239c9d0f4b80a102307865ae
+MD5 (./resources/algeng.text.dawg) = f8e70e42239c9d0f4b80a102307865ae
+MD5 (./resources/fix-locale-issue.log) = 4a53cdfa85eacfd8924ea5e6e2db577d
+MD5 (./resources/ordalisti.add.txt) = ba62d31541a01151c1f039dc75475dab
+MD5 (./resources/ordalisti.algeng.sorted.txt) = fa5f4ffc13953b3bdc6633e651f445a3
+MD5 (./resources/ordalisti.dawg.pickle) = 9d2dc4832c12c1e6cf76426a06f0b4a0
+MD5 (./resources/ordalisti.remove.txt) = dc45f668d19e6c725c111b8001189889
+MD5 (./resources/ordalisti.text-fix-locale-issue.dawg) = 6569ae16ab52dd686a8e4882b2984e22
+MD5 (./resources/ordalisti.text.dawg) = 6569ae16ab52dd686a8e4882b2984e22
+MD5 (./resources/ordalistimax15.sorted.txt) = 06c1ccf3a55ac5cb97cc46bf8b570502
+
+Collation setting with built-in support for is_IS
+Starting DAWG build for skraflhjalp/netskrafl.appspot.com
+DawgBuilder starting...
+Opened input file /Users/stest683/source/Netskrafl/resources/ordalistimax15.sorted.txt
+Opened input file /Users/stest683/source/Netskrafl/resources/ordalisti.add.txt
+Opened input file /Users/stest683/source/Netskrafl/resources/ordalisti.remove.txt
+Outputting...
+Writing DAWG to '/Users/stest683/source/Netskrafl/resources/ordalisti.text.dawg'
+Output graph has 105320 nodes
+DawgBuilder done
+Build took 57.84 seconds
+DAWG loaded in 2.33 seconds
+DAWG pickle file stored in 1.59 seconds
+Starting DAWG build for list of common words
+DawgBuilder starting...
+Opened input file /Users/stest683/source/Netskrafl/resources/ordalisti.algeng.sorted.txt
+Outputting...
+Writing DAWG to '/Users/stest683/source/Netskrafl/resources/algeng.text.dawg'
+Output graph has 72995 nodes
+DawgBuilder done
+Build took 12.98 seconds
+DAWG loaded in 1.46 seconds
+DAWG pickle file stored in 1.09 seconds
+DAWG builder run complete
+
+--- 
+Run the same branch on Win:
+
+--- 
+Run the same branch on Ubuntu
+
+---
+Run the master branch on Ubuntu
