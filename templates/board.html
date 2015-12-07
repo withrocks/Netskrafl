@@ -237,7 +237,7 @@ b<b>æ</b> fæ hæ læ næ pæ ræ sæ
 <!-- A button to shuffle the rack -->
 <div class="scramblebtn" title="Stokka upp rekka"
    onmouseover="buttonOver(this)" onmouseout="buttonOut(this)"
-   onclick="rescrambleRack()"><span class="glyphicon glyphicon-random"></span></div>
+   onclick="skrafl.rack.rescramble()"><span class="glyphicon glyphicon-random"></span></div>
 
 <!-- Move submit button -->
 <div class="submitmove disabled" title="Leika"
@@ -464,11 +464,11 @@ b<b>æ</b> fæ hæ læ næ pæ ræ sæ
       /* Initialize the move list */
 {% for m in game.moves %}
 {%- set coord, tiles, score = m.move.summary(game.state) %}
-      appendMove({{ m.player }}, "{{ coord }}", "{{ tiles }}", {{ score }});
+      skrafl.moveList.appendMove({{ m.player }}, "{{ coord }}", "{{ tiles }}", {{ score }});
 {% endfor %}
 {% if game.is_over() %}
 {% for m in game.get_final_adjustments() %}
-      appendMove({{ m[0] }}, "{{ m[1][0] }}", "{{ m[1][1] }}", {{ m[1][2] }});
+      skrafl.moveList.appendMove({{ m[0] }}, "{{ m[1][0] }}", "{{ m[1][1] }}", {{ m[1][2] }});
 {% endfor %}
 {% endif %}
    }
@@ -615,7 +615,7 @@ b<b>æ</b> fæ hæ læ næ pæ ræ sæ
 {% endif %}
    }
 
-$(document).ready(initSkrafl);
+$(document).ready(initSkrafl({{ request.args.get('debug') or 'false' }}));
 
 </script>
 

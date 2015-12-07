@@ -8,6 +8,7 @@
 */
 
 // Constants
+var DEBUG_MODE = true;
 
 var ROWIDS = "ABCDEFGHIJKLMNO";
 var BOARD_SIZE = 15;
@@ -74,6 +75,9 @@ var GAME_OVER = 99; /* Error code corresponding to the Error class in skraflmech
 
 var MAX_OVERTIME = 10 * 60.0; /* Maximum overtime before a player loses the game, 10 minutes in seconds */
 
+var HORIZONTAL = 1;
+var VERTICAL = 2;
+
 /* Global variables */
 
 var numMoves = 0, numTileMoves = 0; // Moves in total, vs. moves with tiles actually laid down
@@ -87,6 +91,8 @@ var gameOver = false;
 var initializing = true; // True while loading initial move list and setting up
 var _hasLocal = null; // Is HTML5 local storage supported by the browser?
 var _localPrefix = null; // Prefix of local storage for this game
+var quickEditTile = null; // The tile currently being quick edited
+var quickEditTileDirection = HORIZONTAL;
 
 var entityMap = {
    "&": "&amp;",
@@ -97,11 +103,701 @@ var entityMap = {
    "/": '&#x2F;'
 };
 
+/// CLOCK ///
+
+// The Clock class represents one player's clock
+var Clock = function(name, player) {
+    this.name = name;
+    this.runningOut = false;
+    this.blinking = false;
+    this.player = player;
+    this.visible = false;
+};
+
+Clock.prototype.setVisible = function(on) {
+   $("." + name).css("display", "inline-block");
+   this.visible = true;
+};
+
+Clock.prototype.setBlink = function(on) {
+    this.blinking = on;
+    if (on) {
+       $("h3." + time).addClass("blink");
+    }
+    else {
+       $("h3." + this.name).removeClass("blink");
+    }
+};
+Clock.prototype.setTime = function(time) {
+    console.log("Setting time");
+    $("h3." + this.name).text(time);
+    if (time <= "02:00" && !runningOut) {
+       $("h3." + this.name).addClass("running-out");
+       this.runningOut = true;
+    }
+    var locp = localPlayer();
+    // If less than 30 seconds remaining, blink
+    if (this.runningOut && time >= "00:00" && time <= "00:30" && locp === this.player) {
+        this.setBlink(true);
+    }
+
+    // Remove blinking once we're into overtime
+    if (time.charAt(0) == "-" && this.blinking) {
+       this.setBlink(false);
+    }
+};
+
+///// MOVE_MECHANICS /////
+/* Handles the different ways of getting tiles on the board
+   by the user and the state of these
+
+   User can:
+     1. drag/drop tiles
+     2. press a tile in the rack and drop it without having to drag
+     3. (experimental) select an area to fill in either V or H direction
+        and write the word or select tiles from the rack
+   */
+var MoveMechanics = function() {
+    this.elementDragged = null; /* The element being dragged with the mouse */
+    this.tileSelected = null; /* The selected (single-clicked) tile */
+}
+
+MoveMechanics.prototype.moveTile = function(src, target) {
+   // src is a DIV; target is a TD
+   var ok = true;
+   var parentid = src.parentNode.id;
+   if (parentid.charAt(0) == 'R') {
+      /* Dropping from the rack */
+      var t = $(src).data("tile");
+      var dropToRack = (target.id.charAt(0) == 'R');
+      if (!dropToRack && t == '?') {
+         /* Dropping a blank tile on to the board: we need to ask for its meaning */
+         openBlankDialog(src, target);
+         ok = false; // The drop will be completed later, when the blank dialog is closed
+      }
+   }
+   if (ok) {
+      /* Complete the drop */
+      src.parentNode.removeChild(src);
+      target.appendChild(src);
+      if (target.id.charAt(0) == 'R') {
+         /* Dropping into the rack */
+         if ($(src).data("tile") == '?') {
+            /* Dropping a blank tile: erase its letter value, if any */
+            $(src).data("letter", ' ');
+            src.childNodes[0].nodeValue = "\xa0"; // Non-breaking space, i.e. &nbsp;
+         }
+      }
+      // Save this state in local storage,
+      // to be restored when coming back to this game
+      saveTiles();
+   }
+   updateButtonState();
+};
+
+MoveMechanics.prototype.moveSelectedTile = function(sq) {
+   // Move the tileSelected to the target square
+   if (sq.firstChild === null) {
+      this.moveTile(this.tileSelected, sq);
+      this.selectTile(null);
+   }
+}
+
+MoveMechanics.prototype.selectTile = function(elem) {
+   if (elem === this.tileSelected) {
+      if (elem === null)
+         // Nothing was selected - nothing to do
+         return;
+      // Re-clicking on an already selected tile:
+      // remove the selection
+      $(elem).removeClass("sel");
+      this.tileSelected = null;
+   }
+   else {
+      // Changing the selection
+      if (this.tileSelected !== null)
+         $(this.tileSelected).removeClass("sel");
+      this.tileSelected = elem;
+      if (this.tileSelected !== null)
+         $(this.tileSelected).addClass("sel");
+   }
+   if (this.tileSelected !== null) {
+      // We have a selected tile: show a red square around
+      // drop targets for it
+      $("table.board td.ui-droppable").hover(
+         function() { selOver(this); },
+         function() { selOut(this); }
+      ).click(
+         function() { skrafl.moveMechanics.moveSelectedTile(this); }
+      );
+   }
+   else {
+      // No selected tile: no hover
+      $("table.board td.ui-droppable").off("mouseenter mouseleave click").removeClass("sel");
+   }
+}
+
+MoveMechanics.prototype.handleDragstart = function(e, ui) {
+   // NOTE: `this` will NOT apply to the moveMechanics object, as this will
+   // be applied to a tile being dragged
+   // Remove selection, if any
+   skrafl.moveMechanics.selectTile(null); // NOTE: Can't reference this as it will be applied to a tile
+   // Remove the blinking sel class from the drag clone, if there
+   $("div.ui-draggable-dragging").removeClass("sel");
+   // The dragstart target is the DIV inside a TD
+   skrafl.moveMechanics.elementDragged = e.target;
+   // The original tile, still shown while dragging
+   skrafl.moveMechanics.elementDragged.style.opacity = "0.5";
+}
+
+MoveMechanics.prototype.initDraggable = function(elem) {
+   skrafl.log("initDraggable");
+   /* The DIVs inside the board TDs are draggable */
+   $(elem).draggable(
+      {
+         opacity : 0.9,
+         helper : "clone",
+         cursor : "pointer",
+         zIndex : 100,
+         start : skrafl.moveMechanics.handleDragstart,
+         stop : handleDragend
+      }
+   );
+   $(elem).click(function(ev) { skrafl.moveMechanics.selectTile(this); ev.stopPropagation(); });
+}
+
+MoveMechanics.prototype.removeDraggable = function(elem) {
+   skrafl.log("removeDraggable");
+   /* The DIVs inside the board TDs are draggable */
+   $(elem).draggable("destroy");
+   if (elem === tileSelected)
+      this.selectTile(null);
+
+   console.log("Removing click event");
+   $(elem).off("click");  // TODO: removes other click events
+}
+
+MoveMechanics.prototype.initRackDraggable = function(state) {
+    skrafl.log("initRackDraggable");
+   /* Make the seven tiles in the rack draggable or not, depending on
+      the state parameter */
+   $("div.racktile").each(function() {
+      if (!$(this).hasClass("ui-draggable-dragging")) {
+         var sq = $(this).parent().attr("id");
+         var rackTile = document.getElementById(sq);
+         if (rackTile && rackTile.firstChild)
+            /* There is a tile in this rack slot */
+            console.log(this);
+            if (state)
+               skrafl.moveMechanics.initDraggable(rackTile.firstChild);
+            else
+               skrafl.moveMechanics.removeDraggable(rackTile.firstChild);
+      }
+   });
+}
+
+MoveMechanics.prototype.handleDrop = function(e, ui) {
+    skrafl.log("handleDrop");
+   /* A tile is being dropped on a square on the board or into the rack */
+   e.target.classList.remove("over");
+   /* Save the elementDragged value as it will be set to null in handleDragend() */
+   var eld = skrafl.moveMechanics.elementDragged;
+   if (eld === null)
+      return;
+   var i, rslot;
+   eld.style.opacity = null; // "1.0";
+   if (e.target.id == "container") {
+      // Dropping to the background container:
+      // shuffle things around so it looks like we are dropping to the first empty rack slot
+      rslot = null;
+      for (i = 1; i <= RACK_SIZE; i++) {
+         rslot = document.getElementById("R" + i.toString());
+         if (!rslot.firstChild)
+            /* Empty slot in the rack */
+            break;
+         rslot = null;
+      }
+      if (!rslot)
+         return; // Shouldn't really happen
+      e.target = rslot;
+   }
+   var dropToRack = (e.target.id.charAt(0) == 'R');
+   if (dropToRack && e.target.firstChild !== null) {
+      /* Dropping into an already occupied rack slot: shuffle the rack tiles to make room */
+      var ix = parseInt(e.target.id.slice(1));
+      rslot = null;
+      i = 0;
+      /* Try to find an empty slot to the right */
+      for (i = ix + 1; i <= RACK_SIZE; i++) {
+         rslot = document.getElementById("R" + i.toString());
+         if (!rslot.firstChild)
+            /* Empty slot in the rack */
+            break;
+         rslot = null;
+      }
+      if (rslot === null) {
+         /* Not found: Try an empty slot to the left */
+         for (i = ix - 1; i >= 1; i--) {
+            rslot = document.getElementById("R" + i.toString());
+            if (!rslot.firstChild)
+               /* Empty slot in the rack */
+               break;
+            rslot = null;
+         }
+      }
+      if (rslot === null) {
+         /* No empty slot: must be internal shuffle in the rack */
+         rslot = eld.parentNode;
+         i = parseInt(rslot.id.slice(1));
+      }
+      if (rslot !== null) {
+         var j, src, tile;
+         if (i > ix)
+            /* Found empty slot: shift rack tiles to the right to make room */
+            for (j = i; j > ix; j--) {
+               src = document.getElementById("R" + (j - 1).toString());
+               tile = src.firstChild;
+               src.removeChild(tile);
+               rslot.appendChild(tile);
+               rslot = src;
+            }
+         else
+         if (i < ix)
+            /* Found empty slot: shift rack tiles to the left to make room */
+            for (j = i; j < ix; j++) {
+               src = document.getElementById("R" + (j + 1).toString());
+               tile = src.firstChild;
+               src.removeChild(tile);
+               rslot.appendChild(tile);
+               rslot = src;
+            }
+      }
+   }
+   if (e.target.firstChild === null) {
+      /* Looks like a legitimate drop */
+      skrafl.moveMechanics.moveTile(eld, e.target);
+   }
+   skrafl.moveMechanics.elementDragged = null;
+}
+
+// Methods that will be applied to each tile when applicable
+// TODO: add to the class to get the "namespace" of MoveMechanics
+// but make a note of that the this pointer will not be that instance
+function handleDragend(e, ui) {
+   if (skrafl.moveMechanics.elementDragged !== null)
+      skrafl.moveMechanics.elementDragged.style.opacity = null; // "1.0";
+   skrafl.moveMechanics.elementDragged = null;
+}
+
+function handleDropover(e, ui) {
+   if (e.target.id.charAt(0) == 'R' || e.target.firstChild === null)
+     /* Rack square or empty square: can drop. Add yellow outline highlight to square */
+     this.classList.add("over");
+}
+
+function handleDropleave(e, ui) {
+   /* Can drop here: remove outline highlight from square */
+   this.classList.remove("over");
+}
+
+
+///// RACK ///////////////
+var Rack = function() {
+}
+
+Rack.prototype.rescramble = function(ev) {
+   /* Reorder the rack randomly. Bound to the Backspace key. */
+   if (showingDialog)
+      return false;
+   resetRack(ev);
+   var array = [];
+   var i, rackTileId;
+   for (i = 1; i <= RACK_SIZE; i++) {
+      rackTileId = "R" + i.toString();
+      array.push(document.getElementById(rackTileId).firstChild);
+   }
+   var currentIndex = array.length, temporaryValue, randomIndex;
+   // Fisher-Yates (Knuth) shuffle algorithm
+   while (0 !== currentIndex) {
+      randomIndex = Math.floor(Math.random() * currentIndex);
+      currentIndex -= 1;
+      temporaryValue = array[currentIndex];
+      array[currentIndex] = array[randomIndex];
+      array[randomIndex] = temporaryValue;
+   }
+   for (i = 1; i <= RACK_SIZE; i++) {
+      rackTileId = "R" + i.toString();
+      var elem = document.getElementById(rackTileId);
+      if (elem.firstChild !== null)
+         elem.removeChild(elem.firstChild);
+      if (array[i-1] !== null)
+         elem.appendChild(array[i-1]);
+   }
+   saveTiles();
+   return false; // Stop default behavior
+};
+
+/// SCORE ///
+
+/* Defines each player's scoreboard */
+var ScoreBoard = function(name) {
+    this.name = name
+};
+
+ScoreBoard.prototype.setScore = function(score) {
+    console.log("Setting score");
+    $("." + this.name).text(score);
+};
+
+/////////////
+
+/// BOARD
+/* Handles the board, moving tiles to/from it */
+var Board = function () {
+};
+
+
+//// MOVE LIST ///////
+// The move list shows the history of moves
+
+var MoveList = function() {
+};
+
+MoveList.prototype.highlightMove = function(ev) {
+   /* Highlight a move's tiles when hovering over it in the move list */
+   var co = ev.data.coord;
+   var tiles = ev.data.tiles;
+   var playerColor = ev.data.player;
+   var vec = toVector(co);
+   var col = vec.col;
+   var row = vec.row;
+   for (var i = 0; i < tiles.length; i++) {
+      var tile = tiles.charAt(i);
+      if (tile == '?')
+         continue;
+      var sq = coord(row, col);
+      var tileDiv = $("#"+sq).children().eq(0);
+      if (ev.data.show)
+         tileDiv.addClass("highlight" + playerColor);
+      else
+         tileDiv.removeClass("highlight" + playerColor);
+      col += vec.dx;
+      row += vec.dy;
+   }
+   if (ev.data.show)
+      /* Add a highlight to the score */
+      $(this).find("span.score").addClass("highlight");
+   else
+      /* Remove highlight from score */
+      $(this).find("span.score").removeClass("highlight");
+};
+
+MoveList.prototype.appendMove = function(player, co, tiles, score) {
+   /* Add a move to the move history list */
+   var wrdclass = "wordmove";
+   var rawCoord = co;
+   var tileMove = false;
+   if (co === "") {
+      /* Not a regular tile move */
+      wrdclass = "othermove";
+      if (tiles == "PASS")
+         /* Pass move */
+         tiles = "Pass";
+      else
+      if (tiles.indexOf("EXCH") === 0) {
+         /* Exchange move - we don't show the actual tiles exchanged, only their count */
+         var numtiles = tiles.slice(5).length;
+         tiles = "Skipti um " + numtiles.toString() + (numtiles == 1 ? " staf" : " stafi");
+      }
+      else
+      if (tiles == "RSGN")
+         /* Resigned from game */
+         tiles = " Gaf viðureign"; // Extra space intentional
+      else
+      if (tiles == "TIME") {
+         /* Overtime adjustment */
+         tiles = " Umframtími "; // Extra spaces intentional
+      }
+      else
+      if (tiles == "OVER") {
+         /* Game over */
+         tiles = "Viðureign lokið";
+         wrdclass = "gameover";
+         gameOver = true;
+      }
+      else {
+         /* The rack leave at the end of the game (which is always in lowercase
+            and thus cannot be confused with the above abbreviations) */
+         wrdclass = "wordmove";
+      }
+   }
+   else {
+      co = "(" + co + ")";
+      // Note: String.replace() will not work here since there may be two question marks in the string
+      tiles = tiles.split("?").join(""); /* !!! TODO: Display wildcard characters differently? */
+      tileMove = true;
+   }
+   /* Update the scores */
+   if (player === 0)
+      leftTotal = Math.max(leftTotal + score, 0);
+   else
+      rightTotal = Math.max(rightTotal + score, 0);
+   var str;
+   var title = tileMove ? 'title="Smelltu til að fletta upp" ' : "";
+   if (wrdclass == "gameover") {
+      str = '<div class="move gameover"><span class="gameovermsg">' + tiles + '</span>' +
+         '<span class="statsbutton" onclick="navToReview()">Skoða yfirlit</span></div>';
+      // Show a congratulatory message if the local player is the winner
+      var winner = -2; // -1 is reserved
+      if (leftTotal > rightTotal)
+         winner = 0;
+      else
+      if (leftTotal < rightTotal)
+         winner = 1;
+      if (localPlayer() == winner) {
+         $("#congrats").css("visibility", "visible");
+         if (!initializing || gameIsZombie()) {
+            // The local player is winning in real time or opening the
+            // game for the first time after winning it in absentia:
+            // Play fanfare sound if audio enabled
+            var youWin = document.getElementById("you-win");
+            if (youWin)
+               youWin.play();
+         }
+      }
+      // Show the Facebook share button if the game is over
+      $("div.fb-share").css("visibility", "visible");
+      // Clear local storage, if any
+      clearTiles();
+   }
+   else
+   if (player === 0) {
+      /* Left side player */
+      str = '<div ' + title + 'class="move leftmove">' +
+         '<span class="total">' + leftTotal + '</span>' +
+         '<span class="score">' + score + '</span>' +
+         '<span class="' + wrdclass + '"><i>' + tiles + '</i> ' +
+         co + '</span>' +
+         '</div>';
+   }
+   else {
+      /* Right side player */
+      str = '<div ' + title + 'class="move rightmove">' +
+         '<span class="' + wrdclass + '">' + co +
+         ' <i>' + tiles + '</i></span>' +
+         '<span class="score">' + score + '</span>' +
+         '<span class="total">' + rightTotal + '</span>' +
+         '</div>';
+   }
+   var movelist = $("div.movelist");
+   movelist.append(str);
+   if (wrdclass != "gameover") {
+      var m = movelist.children().last();
+      var playerColor = "0";
+      var lcp = localPlayer();
+      if (player === lcp || (lcp == -1 && player === 0))
+         m.addClass("humangrad" + (player === 0 ? "_left" : "_right")); /* Local player */
+      else {
+         m.addClass("autoplayergrad" + (player === 0 ? "_left" : "_right")); /* Remote player */
+         playerColor = "1";
+      }
+      if (tileMove) {
+         /* Register a hover event handler to highlight this move */
+         m.on("mouseover",
+            { coord: rawCoord, tiles: tiles, score: score, player: playerColor, show: true },
+            this.highlightMove
+         );
+         m.on("mouseout",
+            { coord: rawCoord, tiles: tiles, score: score, player: playerColor, show: false },
+            this.highlightMove
+         );
+         // Clicking on a word in the word list looks up the word on the official word list website
+         m.on("click",
+            { tiles: tiles },
+            lookupWord
+         );
+      }
+   }
+   /* Manage the scrolling of the move list */
+   var lastchild = $("div.movelist .move").last();
+   var firstchild = $("div.movelist .move").first();
+   var topoffset = lastchild.position().top -
+      firstchild.position().top +
+      lastchild.outerHeight();
+   var height = movelist.height();
+   if (topoffset >= height)
+      movelist.scrollTop(topoffset - height);
+   /* Count the moves */
+   numMoves += 1;
+   if (tileMove)
+      numTileMoves += 1;
+}
+
+
+//// SKRAFL GAME MANAGEMENT OBJECT ///
+var SkraflGame = function(debug) {
+    console.log("Initialize skrafl...");
+    this.clockLeft = new Clock("clockleft", 0);
+    this.clockRight = new Clock("clockright", 1);
+    this.rack = new Rack();
+    this.scoreLeft = new ScoreBoard('scoreleft');
+    this.scoreRight = new ScoreBoard('scoreright');
+    this.moveList = new MoveList();
+    this.moveMechanics = new MoveMechanics();
+
+    if (debug) {
+        // TODO: Parameter?
+        this.log = function(msg) {
+            console.log(msg);
+        }
+    }
+    else {
+        this.log = function () {}
+    }
+};
+
+SkraflGame.prototype.updateScores = function() {
+   /* Display the current score including overtime penalty, if any */
+   var displayLeft = Math.max(scoreLeft + penaltyLeft, 0);
+   var displayRight = Math.max(scoreRight + penaltyRight, 0);
+   this.scoreLeft.setScore(displayLeft);
+   this.scoreRight.setScore(displayRight);
+}
+
+SkraflGame.prototype.updateClock = function() {
+   /* Show the current remaining time for both players */
+   var txt0 = calcTimeToGo(0);
+   var txt1 = calcTimeToGo(1);
+   clockLeft.setTime(txt0);
+   clockRight.setTime(txt1);
+
+   if (gameOver || penaltyLeft !== 0 || penaltyRight !== 0)
+      // If we are applying an overtime penalty to the scores, update them in real-time
+      this.updateScores();
+};
+
+SkraflGame.prototype.resetClock = function(newGameTime) {
+   /* Set a new time base after receiving an update from the server */
+   gameTime = newGameTime;
+   gameTimeBase = new Date();
+   this.updateClock();
+   if (gameOver) {
+      // Game over: stop updating the clock
+      if (clockIval) {
+         window.clearInterval(clockIval);
+         clockIval = null;
+      }
+      // Stop blinking, if any
+      this.clockLeft.setBlink(false);
+      this.clockRight.setBlink(false);
+   }
+}
+
+SkraflGame.prototype.showClock = function() {
+   /* This is a timed game: show the clock stuff */
+   this.clockLeft.setVisible(true);
+   this.clockRight.setVisible(true);
+   $(".clockface").css("display", "block");
+   $("div.right-area").addClass("with-clock");
+   $("div.chat-area").addClass("with-clock");
+   $("div.twoletter-area").addClass("with-clock");
+}
+
+SkraflGame.prototype.startClock = function(igt) {
+   /* Start the clock ticking - called from initSkrafl() */
+   this.resetClock(igt);
+   // Make sure the clock ticks reasonably regularly, once per second
+   // According to Nyquist, we need a refresh interval of no more than 1/2 second
+   if (!gameOver)
+      clockIval = window.setInterval(updateClock, 500);
+}
+var skrafl = null;
+
+
+///// UTILS //////////////
+function decodeTimestamp(ts) {
+   // Parse and split a timestamp string from the format YYYY-MM-DD HH:MM:SS
+   return {
+      year: parseInt(ts.substr(0, 4)),
+      month: parseInt(ts.substr(5, 2)),
+      day: parseInt(ts.substr(8, 2)),
+      hour: parseInt(ts.substr(11, 2)),
+      minute: parseInt(ts.substr(14, 2)),
+      second: parseInt(ts.substr(17, 2))
+   };
+}
+
+function timeDiff(dtFrom, dtTo) {
+   // Return the difference between two JavaScript time points, in seconds
+   return Math.round((dtTo - dtFrom) / 1000.0);
+}
+
 function escapeHtml(string) {
    /* Utility function to properly encode a string into HTML */
    return String(string).replace(/[&<>"'\/]/g, function (s) {
       return entityMap[s];
    });
+}
+
+function arrayEqual(a, b) {
+   /* Return true if arrays a and b are equal */
+   if (a.length != b.length)
+      return false;
+   for (var i = 0; i < a.length; i++)
+      if (a[i] != b[i])
+         return false;
+   return true;
+}
+
+function nullFunc(json) {
+   /* Null placeholder function to use for Ajax queries that don't need a success func */
+}
+
+function nullCompleteFunc(xhr, status) {
+   /* Null placeholder function for Ajax completion */
+}
+
+function errFunc(xhr, status, errorThrown) {
+   /* Default error handling function for Ajax communications */
+   // alert("Villa í netsamskiptum");
+   console.log("Error: " + errorThrown);
+   console.log("Status: " + status);
+   console.dir(xhr);
+}
+
+function serverQuery(requestUrl, jsonData, successFunc, completeFunc, errorFunc) {
+   /* Wraps a simple, standard Ajax request to the server */
+   $.ajax({
+      // The URL for the request
+      url: requestUrl,
+
+      // The data to send
+      data: jsonData,
+
+      // Whether this is a POST or GET request
+      type: "POST",
+
+      // The type of data we expect back
+      dataType : "json",
+
+      cache: false,
+
+      // Code to run if the request succeeds;
+      // the response is passed to the function
+      success: (!successFunc) ? nullFunc : successFunc,
+
+      // Code to run if the request fails; the raw request and
+      // status codes are passed to the function
+      error: (!errorFunc) ? errFunc : errorFunc,
+
+      // code to run regardless of success or failure
+      complete: (!completeFunc) ? nullCompleteFunc : completeFunc
+   });
+}
+
+function reloadPage() {
+   /* Reload this page from the server */
+   window.location.reload(true); // Bypass cache
 }
 
 function hasLocalStorage() {
@@ -119,6 +815,9 @@ function hasLocalStorage() {
    return _hasLocal;
 }
 
+/////////////////////////
+
+//// STORAGE ////////////
 function getLocalTile(ix) {
    return localStorage[_localPrefix + ".tile." + ix + ".t"];
 }
@@ -178,16 +877,6 @@ function saveTiles() {
    }
    catch (e) {
    }
-}
-
-function arrayEqual(a, b) {
-   /* Return true if arrays a and b are equal */
-   if (a.length != b.length)
-      return false;
-   for (var i = 0; i < a.length; i++)
-      if (a[i] != b[i])
-         return false;
-   return true;
 }
 
 function restoreTiles() {
@@ -272,52 +961,6 @@ function restoreTiles() {
    }
 }
 
-function nullFunc(json) {
-   /* Null placeholder function to use for Ajax queries that don't need a success func */
-}
-
-function nullCompleteFunc(xhr, status) {
-   /* Null placeholder function for Ajax completion */
-}
-
-function errFunc(xhr, status, errorThrown) {
-   /* Default error handling function for Ajax communications */
-   // alert("Villa í netsamskiptum");
-   console.log("Error: " + errorThrown);
-   console.log("Status: " + status);
-   console.dir(xhr);
-}
-
-function serverQuery(requestUrl, jsonData, successFunc, completeFunc, errorFunc) {
-   /* Wraps a simple, standard Ajax request to the server */
-   $.ajax({
-      // The URL for the request
-      url: requestUrl,
-
-      // The data to send
-      data: jsonData,
-
-      // Whether this is a POST or GET request
-      type: "POST",
-
-      // The type of data we expect back
-      dataType : "json",
-
-      cache: false,
-
-      // Code to run if the request succeeds;
-      // the response is passed to the function
-      success: (!successFunc) ? nullFunc : successFunc,
-
-      // Code to run if the request fails; the raw request and
-      // status codes are passed to the function
-      error: (!errorFunc) ? errFunc : errorFunc,
-
-      // code to run regardless of success or failure
-      complete: (!completeFunc) ? nullCompleteFunc : completeFunc
-   });
-}
-
 function coord(row, col) {
    /* Return the co-ordinate string for the given 0-based row and col */
    return ROWIDS.charAt(row) + (col + 1).toString();
@@ -353,11 +996,6 @@ function tileAt(row, col) {
    if ($(el.firstChild).hasClass("ui-draggable-dragging"))
       return null;
    return el.firstChild;
-}
-
-function reloadPage() {
-   /* Reload this page from the server */
-   window.location.reload(true); // Bypass cache
 }
 
 function calcTimeToGo(player) {
@@ -396,93 +1034,13 @@ function calcTimeToGo(player) {
       ("0" + min.toString()).slice(-2) + ":" + ("0" + sec.toString()).slice(-2);
 }
 
-function updateScores() {
-   /* Display the current score including overtime penalty, if any */
-   var displayLeft = Math.max(scoreLeft + penaltyLeft, 0);
-   var displayRight = Math.max(scoreRight + penaltyRight, 0);
-   $(".scoreleft").text(displayLeft);
-   $(".scoreright").text(displayRight);
-}
 
-var runningOut0 = false, blinking0 = false;
-var runningOut1 = false, blinking1 = false;
+///////////////////////
 
-function updateClock() {
-   /* Show the current remaining time for both players */
-   var txt0 = calcTimeToGo(0);
-   var txt1 = calcTimeToGo(1);
-   $("h3.clockleft").text(txt0);
-   $("h3.clockright").text(txt1);
-   // Check whether time is running out - and display accordingly
-   if (txt0 <= "02:00" && !runningOut0) {
-      $("h3.clockleft").addClass("running-out");
-      runningOut0 = true;
-   }
-   if (txt1 <= "02:00" && !runningOut1) {
-      $("h3.clockright").addClass("running-out");
-      runningOut1 = true;
-   }
-   var locp = localPlayer();
-   // If less than 30 seconds remaining, blink
-   if (runningOut0 && txt0 >= "00:00" && txt0 <= "00:30" && locp === 0) {
-      $("h3.clockleft").toggleClass("blink");
-      blinking0 = true;
-   }
-   if (runningOut1 && txt1 >= "00:00" && txt1 <= "00:30" && locp === 1) {
-      $("h3.clockright").toggleClass("blink");
-      blinking1 = true;
-   }
-   // Remove blinking once we're into overtime
-   if (txt0.charAt(0) == "-" && blinking0) {
-      $("h3.clockleft").removeClass("blink");
-      blinking0 = false;
-   }
-   if (txt1.charAt(0) == "-" && blinking1) {
-      $("h3.clockright").removeClass("blink");
-      blinking1 = false;
-   }
-   if (gameOver || penaltyLeft !== 0 || penaltyRight !== 0)
-      // If we are applying an overtime penalty to the scores, update them in real-time
-      updateScores();
-}
 
-function resetClock(newGameTime) {
-   /* Set a new time base after receiving an update from the server */
-   gameTime = newGameTime;
-   gameTimeBase = new Date();
-   updateClock();
-   if (gameOver) {
-      // Game over: stop updating the clock
-      if (clockIval) {
-         window.clearInterval(clockIval);
-         clockIval = null;
-      }
-      // Stop blinking, if any
-      $("h3.clockleft").removeClass("blink");
-      $("h3.clockright").removeClass("blink");
-   }
-}
-
-function showClock() {
-   /* This is a timed game: show the clock stuff */
-   $(".clockleft").css("display", "inline-block");
-   $(".clockright").css("display", "inline-block");
-   $(".clockface").css("display", "block");
-   $("div.right-area").addClass("with-clock");
-   $("div.chat-area").addClass("with-clock");
-   $("div.twoletter-area").addClass("with-clock");
-}
-
-function startClock(igt) {
-   /* Start the clock ticking - called from initSkrafl() */
-   resetClock(igt);
-   // Make sure the clock ticks reasonably regularly, once per second
-   // According to Nyquist, we need a refresh interval of no more than 1/2 second
-   if (!gameOver)
-      clockIval = window.setInterval(updateClock, 500);
-}
-
+//// TILES - movement /////
 function placeTile(sq, tile, letter, score) {
+   skrafl.log("placeTile: " + tile);
    /* Place a given tile in a particular square, either on the board or in the rack */
    if (tile.length === 0) {
       /* Erasing tile */
@@ -514,6 +1072,7 @@ function placeTile(sq, tile, letter, score) {
 }
 
 function placeMove(player, co, tiles) {
+   skrafl.log("placeMove: " + tiles);
    /* Place an entire move on the board, returning a dictionary of the tiles actually added */
    var vec = toVector(co);
    var col = vec.col;
@@ -644,180 +1203,10 @@ function showBestMove(ev) {
    }
 }
 
-function highlightMove(ev) {
-   /* Highlight a move's tiles when hovering over it in the move list */
-   var co = ev.data.coord;
-   var tiles = ev.data.tiles;
-   var playerColor = ev.data.player;
-   var vec = toVector(co);
-   var col = vec.col;
-   var row = vec.row;
-   for (var i = 0; i < tiles.length; i++) {
-      var tile = tiles.charAt(i);
-      if (tile == '?')
-         continue;
-      var sq = coord(row, col);
-      var tileDiv = $("#"+sq).children().eq(0);
-      if (ev.data.show)
-         tileDiv.addClass("highlight" + playerColor);
-      else
-         tileDiv.removeClass("highlight" + playerColor);
-      col += vec.dx;
-      row += vec.dy;
-   }
-   if (ev.data.show)
-      /* Add a highlight to the score */
-      $(this).find("span.score").addClass("highlight");
-   else
-      /* Remove highlight from score */
-      $(this).find("span.score").removeClass("highlight");
-}
-
 function lookupWord(ev) {
    /* Look up the word on the official word list website */
    window.open('http://bin.arnastofnun.is/leit/?q=' + ev.data.tiles +
       '&ordmyndir=on', 'bin');
-}
-
-function appendMove(player, co, tiles, score) {
-   /* Add a move to the move history list */
-   var wrdclass = "wordmove";
-   var rawCoord = co;
-   var tileMove = false;
-   if (co === "") {
-      /* Not a regular tile move */
-      wrdclass = "othermove";
-      if (tiles == "PASS")
-         /* Pass move */
-         tiles = "Pass";
-      else
-      if (tiles.indexOf("EXCH") === 0) {
-         /* Exchange move - we don't show the actual tiles exchanged, only their count */
-         var numtiles = tiles.slice(5).length;
-         tiles = "Skipti um " + numtiles.toString() + (numtiles == 1 ? " staf" : " stafi");
-      }
-      else
-      if (tiles == "RSGN")
-         /* Resigned from game */
-         tiles = " Gaf viðureign"; // Extra space intentional
-      else
-      if (tiles == "TIME") {
-         /* Overtime adjustment */
-         tiles = " Umframtími "; // Extra spaces intentional
-      }
-      else
-      if (tiles == "OVER") {
-         /* Game over */
-         tiles = "Viðureign lokið";
-         wrdclass = "gameover";
-         gameOver = true;
-      }
-      else {
-         /* The rack leave at the end of the game (which is always in lowercase
-            and thus cannot be confused with the above abbreviations) */
-         wrdclass = "wordmove";
-      }
-   }
-   else {
-      co = "(" + co + ")";
-      // Note: String.replace() will not work here since there may be two question marks in the string
-      tiles = tiles.split("?").join(""); /* !!! TODO: Display wildcard characters differently? */
-      tileMove = true;
-   }
-   /* Update the scores */
-   if (player === 0)
-      leftTotal = Math.max(leftTotal + score, 0);
-   else
-      rightTotal = Math.max(rightTotal + score, 0);
-   var str;
-   var title = tileMove ? 'title="Smelltu til að fletta upp" ' : "";
-   if (wrdclass == "gameover") {
-      str = '<div class="move gameover"><span class="gameovermsg">' + tiles + '</span>' +
-         '<span class="statsbutton" onclick="navToReview()">Skoða yfirlit</span></div>';
-      // Show a congratulatory message if the local player is the winner
-      var winner = -2; // -1 is reserved
-      if (leftTotal > rightTotal)
-         winner = 0;
-      else
-      if (leftTotal < rightTotal)
-         winner = 1;
-      if (localPlayer() == winner) {
-         $("#congrats").css("visibility", "visible");
-         if (!initializing || gameIsZombie()) {
-            // The local player is winning in real time or opening the
-            // game for the first time after winning it in absentia:
-            // Play fanfare sound if audio enabled
-            var youWin = document.getElementById("you-win");
-            if (youWin)
-               youWin.play();
-         }
-      }
-      // Show the Facebook share button if the game is over
-      $("div.fb-share").css("visibility", "visible");
-      // Clear local storage, if any
-      clearTiles();
-   }
-   else
-   if (player === 0) {
-      /* Left side player */
-      str = '<div ' + title + 'class="move leftmove">' +
-         '<span class="total">' + leftTotal + '</span>' +
-         '<span class="score">' + score + '</span>' +
-         '<span class="' + wrdclass + '"><i>' + tiles + '</i> ' +
-         co + '</span>' +
-         '</div>';
-   }
-   else {
-      /* Right side player */
-      str = '<div ' + title + 'class="move rightmove">' +
-         '<span class="' + wrdclass + '">' + co +
-         ' <i>' + tiles + '</i></span>' +
-         '<span class="score">' + score + '</span>' + 
-         '<span class="total">' + rightTotal + '</span>' +
-         '</div>';
-   }
-   var movelist = $("div.movelist");
-   movelist.append(str);
-   if (wrdclass != "gameover") {
-      var m = movelist.children().last();
-      var playerColor = "0";
-      var lcp = localPlayer();
-      if (player === lcp || (lcp == -1 && player === 0))
-         m.addClass("humangrad" + (player === 0 ? "_left" : "_right")); /* Local player */
-      else {
-         m.addClass("autoplayergrad" + (player === 0 ? "_left" : "_right")); /* Remote player */
-         playerColor = "1";
-      }
-      if (tileMove) {
-         /* Register a hover event handler to highlight this move */
-         m.on("mouseover",
-            { coord: rawCoord, tiles: tiles, score: score, player: playerColor, show: true },
-            highlightMove
-         );
-         m.on("mouseout",
-            { coord: rawCoord, tiles: tiles, score: score, player: playerColor, show: false },
-            highlightMove
-         );
-         // Clicking on a word in the word list looks up the word on the official word list website
-         m.on("click",
-            { tiles: tiles },
-            lookupWord
-         );
-      }
-   }
-   /* Manage the scrolling of the move list */
-   var lastchild = $("div.movelist .move").last();
-   var firstchild = $("div.movelist .move").first();
-   var topoffset = lastchild.position().top -
-      firstchild.position().top +
-      lastchild.outerHeight();
-   var height = movelist.height();
-   if (topoffset >= height)
-      movelist.scrollTop(topoffset - height);
-   /* Count the moves */
-   numMoves += 1;
-   if (tileMove)
-      numTileMoves += 1;
 }
 
 function appendBestMove(player, co, tiles, score) {
@@ -1020,18 +1409,8 @@ function prepareBlankDialog() {
    $("#blank-close").click("", closeBlankDialog);
 }
 
-var elementDragged = null; /* The element being dragged with the mouse */
-var tileSelected = null; /* The selected (single-clicked) tile */
 var showingDialog = false; /* Is a modal dialog banner being shown? */
 var exchangeAllowed = true; /* Is an exchange move allowed? */
-
-function moveSelectedTile(sq) {
-   // Move the tileSelected to the target square
-   if (sq.firstChild === null) {
-      moveTile(tileSelected, sq);
-      selectTile(null);
-   }
-}
 
 function selOver(sq) {
    if (sq.firstChild === null)
@@ -1041,108 +1420,6 @@ function selOver(sq) {
 
 function selOut(sq) {
    $(sq).removeClass("sel");
-}
-
-function selectTile(elem) {
-   if (elem === tileSelected) {
-      if (elem === null)
-         // Nothing was selected - nothing to do
-         return;
-      // Re-clicking on an already selected tile:
-      // remove the selection
-      $(elem).removeClass("sel");
-      tileSelected = null;
-   }
-   else {
-      // Changing the selection
-      if (tileSelected !== null)
-         $(tileSelected).removeClass("sel");
-      tileSelected = elem;
-      if (tileSelected !== null)
-         $(tileSelected).addClass("sel");
-   }
-   if (tileSelected !== null) {
-      // We have a selected tile: show a red square around
-      // drop targets for it
-      $("table.board td.ui-droppable").hover(
-         function() { selOver(this); },
-         function() { selOut(this); }
-      ).click(
-         function() { moveSelectedTile(this); }
-      );
-   }
-   else {
-      // No selected tile: no hover
-      $("table.board td.ui-droppable").off("mouseenter mouseleave click").removeClass("sel");
-   }
-}
-
-function handleDragstart(e, ui) {
-   // Remove selection, if any
-   selectTile(null);
-   // Remove the blinking sel class from the drag clone, if there
-   $("div.ui-draggable-dragging").removeClass("sel");
-   // The dragstart target is the DIV inside a TD
-   elementDragged = e.target;
-   // The original tile, still shown while dragging
-   elementDragged.style.opacity = "0.5";
-}
-
-function handleDragend(e, ui) {
-   if (elementDragged !== null)
-      elementDragged.style.opacity = null; // "1.0";
-   elementDragged = null;
-}
-
-function handleDropover(e, ui) {
-   if (e.target.id.charAt(0) == 'R' || e.target.firstChild === null)
-     /* Rack square or empty square: can drop. Add yellow outline highlight to square */
-     this.classList.add("over");
-}
-
-function handleDropleave(e, ui) {
-   /* Can drop here: remove outline highlight from square */
-   this.classList.remove("over");
-}
-
-function initDraggable(elem) {
-   /* The DIVs inside the board TDs are draggable */
-   $(elem).draggable(
-      {
-         opacity : 0.9,
-         helper : "clone",
-         cursor : "pointer",
-         zIndex : 100,
-         start : handleDragstart,
-         stop : handleDragend
-      }
-   );
-   $(elem).click(function(ev) { selectTile(this); ev.stopPropagation(); });
-}
-
-function removeDraggable(elem) {
-   /* The DIVs inside the board TDs are draggable */
-   $(elem).draggable("destroy");
-   if (elem === tileSelected)
-      selectTile(null);
-   $(elem).off("click");
-}
-
-function initRackDraggable(state) {
-   /* Make the seven tiles in the rack draggable or not, depending on
-      the state parameter */
-   $("div.racktile").each(function() {
-      if (!$(this).hasClass("ui-draggable-dragging")) {
-         var sq = $(this).parent().attr("id");
-         var rackTile = document.getElementById(sq);
-         if (rackTile && rackTile.firstChild)
-            /* There is a tile in this rack slot */
-            if (state)
-               initDraggable(rackTile.firstChild);
-            else
-               removeDraggable(rackTile.firstChild);
-      }
-   });
 }
 
 function firstEmptyRackSlot() {
@@ -1161,11 +1438,65 @@ function initDropTarget(elem) {
    if (elem !== null)
       elem.droppable(
          {
-            drop : handleDrop,
+            drop : skrafl.moveMechanics.handleDrop,
             over : handleDropover,
             out : handleDropleave
          }
       );
+}
+
+function applyToBoard(fn) {
+   // Applies the fn to each tile on the board
+   var x, y, sq;
+   for (x = 0; x < BOARD_SIZE; x++)
+      for (y = 0; y < BOARD_SIZE; y++) {
+         sq = $("#" + coord(y, x));
+         fn(sq);
+      }
+}
+
+function initQuickEdit(tile) {
+    // When you press a tile that supports quick edit,
+    // it should go into the quick edit mode, first in
+    // horizontal, then in vertical
+
+    // TODO: prettify
+    tile.click(function() {
+        skrafl.log('tile clicked');
+        // Remove previous selection
+        if (quickEditTile != null && quickEditTile != tile) {
+            quickEditTile.removeClass('quickHorizontalSel');
+            quickEditTile.removeClass('quickVerticalSel');
+        }
+
+        // 1. Do we accept quick clicks? ie. nothing selected
+        if (tile.hasClass('quickHorizontalSel')) {
+            tile.removeClass('quickHorizontalSel');
+            tile.addClass('quickVerticalSel');
+            quickEditTile = tile;
+            quickEditTileDirection = VERTICAL;
+        }
+        else if (tile.hasClass('quickVerticalSel')) {
+            tile.removeClass('quickVerticalSel');
+            quickEditTile = null;
+        }
+        else {
+            tile.addClass('quickHorizontalSel');
+            quickEditTile = tile;
+            quickEditTileDirection = HORIZONTAL;
+        }
+    });
+
+}
+
+function initQuickEdits() {
+   /* TODO: Better name for this
+   Inits the element as one that can be quick edited
+   I.e. it can be set into either vertical or horizontal editing
+   mode, where the user can then either type or select from the
+   rack to quickly edit.
+   */
+   applyToBoard(initQuickEdit);
 }
 
 function initDropTargets() {
@@ -1183,122 +1514,6 @@ function initDropTargets() {
    }
    /* Make the background a drop target */
    initDropTarget($("#container"));
-}
-
-function moveTile(src, target) {
-   // src is a DIV; target is a TD
-   var ok = true;
-   var parentid = src.parentNode.id;
-   if (parentid.charAt(0) == 'R') {
-      /* Dropping from the rack */
-      var t = $(src).data("tile");
-      var dropToRack = (target.id.charAt(0) == 'R');
-      if (!dropToRack && t == '?') {
-         /* Dropping a blank tile on to the board: we need to ask for its meaning */
-         openBlankDialog(src, target);
-         ok = false; // The drop will be completed later, when the blank dialog is closed
-      }
-   }
-   if (ok) {
-      /* Complete the drop */
-      src.parentNode.removeChild(src);
-      target.appendChild(src);
-      if (target.id.charAt(0) == 'R') {
-         /* Dropping into the rack */
-         if ($(src).data("tile") == '?') {
-            /* Dropping a blank tile: erase its letter value, if any */
-            $(src).data("letter", ' ');
-            src.childNodes[0].nodeValue = "\xa0"; // Non-breaking space, i.e. &nbsp;
-         }
-      }
-      // Save this state in local storage,
-      // to be restored when coming back to this game
-      saveTiles();
-   }
-   updateButtonState();
-}
-
-function handleDrop(e, ui) {
-   /* A tile is being dropped on a square on the board or into the rack */
-   e.target.classList.remove("over");
-   /* Save the elementDragged value as it will be set to null in handleDragend() */
-   var eld = elementDragged;
-   if (eld === null)
-      return;
-   var i, rslot;
-   eld.style.opacity = null; // "1.0";
-   if (e.target.id == "container") {
-      // Dropping to the background container:
-      // shuffle things around so it looks like we are dropping to the first empty rack slot
-      rslot = null;
-      for (i = 1; i <= RACK_SIZE; i++) {
-         rslot = document.getElementById("R" + i.toString());
-         if (!rslot.firstChild)
-            /* Empty slot in the rack */
-            break;
-         rslot = null;
-      }
-      if (!rslot)
-         return; // Shouldn't really happen
-      e.target = rslot;
-   }
-   var dropToRack = (e.target.id.charAt(0) == 'R');
-   if (dropToRack && e.target.firstChild !== null) {
-      /* Dropping into an already occupied rack slot: shuffle the rack tiles to make room */
-      var ix = parseInt(e.target.id.slice(1));
-      rslot = null;
-      i = 0;
-      /* Try to find an empty slot to the right */
-      for (i = ix + 1; i <= RACK_SIZE; i++) {
-         rslot = document.getElementById("R" + i.toString());
-         if (!rslot.firstChild)
-            /* Empty slot in the rack */
-            break;
-         rslot = null;
-      }
-      if (rslot === null) {
-         /* Not found: Try an empty slot to the left */
-         for (i = ix - 1; i >= 1; i--) {
-            rslot = document.getElementById("R" + i.toString());
-            if (!rslot.firstChild)
-               /* Empty slot in the rack */
-               break;
-            rslot = null;
-         }
-      }
-      if (rslot === null) {
-         /* No empty slot: must be internal shuffle in the rack */
-         rslot = eld.parentNode;
-         i = parseInt(rslot.id.slice(1));
-      }
-      if (rslot !== null) {
-         var j, src, tile;
-         if (i > ix)
-            /* Found empty slot: shift rack tiles to the right to make room */
-            for (j = i; j > ix; j--) {
-               src = document.getElementById("R" + (j - 1).toString());
-               tile = src.firstChild;
-               src.removeChild(tile);
-               rslot.appendChild(tile);
-               rslot = src;
-            }
-         else
-         if (i < ix)
-            /* Found empty slot: shift rack tiles to the left to make room */
-            for (j = i; j < ix; j++) {
-               src = document.getElementById("R" + (j + 1).toString());
-               tile = src.firstChild;
-               src.removeChild(tile);
-               rslot.appendChild(tile);
-               rslot = src;
-            }
-      }
-   }
-   if (e.target.firstChild === null) {
-      /* Looks like a legitimate drop */
-      moveTile(eld, e.target);
-   }
-   elementDragged = null;
 }
 
 /* The word that is being checked for validity with a server query */
@@ -1574,7 +1789,7 @@ function resetRack(ev) {
             if (rackTile && rackTile.firstChild === null) {
                /* Found empty rack slot: put this there */
                placeTile(rackTileId, t, t, score);
-               initDraggable(rackTile.firstChild);
+               skrafl.moveMechanics.initDraggable(rackTile.firstChild);
                rslot++;
                break;
             }
@@ -1584,38 +1799,6 @@ function resetRack(ev) {
    saveTiles();
    updateButtonState();
    return true;
-}
-
-function rescrambleRack(ev) {
-   /* Reorder the rack randomly. Bound to the Backspace key. */
-   if (showingDialog)
-      return false;
-   resetRack(ev);
-   var array = [];
-   var i, rackTileId;
-   for (i = 1; i <= RACK_SIZE; i++) {
-      rackTileId = "R" + i.toString();
-      array.push(document.getElementById(rackTileId).firstChild);
-   }
-   var currentIndex = array.length, temporaryValue, randomIndex;
-   // Fisher-Yates (Knuth) shuffle algorithm
-   while (0 !== currentIndex) {
-      randomIndex = Math.floor(Math.random() * currentIndex);
-      currentIndex -= 1;
-      temporaryValue = array[currentIndex];
-      array[currentIndex] = array[randomIndex];
-      array[randomIndex] = temporaryValue;
-   }
-   for (i = 1; i <= RACK_SIZE; i++) {
-      rackTileId = "R" + i.toString();
-      var elem = document.getElementById(rackTileId);
-      if (elem.firstChild !== null)
-         elem.removeChild(elem.firstChild);
-      if (array[i-1] !== null)
-         elem.appendChild(array[i-1]);
-   }
-   saveTiles();
-   return false; // Stop default behavior
 }
 
 function updateBag(bag) {
@@ -1663,7 +1846,7 @@ function _updateState(json, preserveTiles) {
          // The user may have placed tiles on the board: force them back
          // into the rack and make the rack non-draggable
          resetRack();
-         initRackDraggable(false);
+         skrafl.moveMechanics.initRackDraggable(false);
       }
       if (!preserveTiles) {
          for (; i < json.rack.length; i++)
@@ -1676,7 +1859,7 @@ function _updateState(json, preserveTiles) {
             placeTile("R" + (i + 1).toString(), "", "", 0);
          if (json.result === 0)
             /* The rack is only draggable if the game is still ongoing */
-            initRackDraggable(true);
+            skrafl.moveMechanics.initRackDraggable(true);
          /* Glue the laid-down tiles to the board */
          $("div.tile").each(function() {
             var sq = $(this).parent().attr("id");
@@ -1713,7 +1896,7 @@ function _updateState(json, preserveTiles) {
                if (rsq) { // Should always be non-null
                   placeTile(rsq, t, t, score);
                   // Make the rack tile draggable
-                  initDraggable(document.getElementById(rsq).firstChild);
+                  skrafl.moveMechanics.initDraggable(document.getElementById(rsq).firstChild);
                }
             }
             placeTile(sq, /* Coordinate */
@@ -1736,7 +1919,7 @@ function _updateState(json, preserveTiles) {
             var co = json.newmoves[i][1][0];
             var tiles = json.newmoves[i][1][1];
             score = json.newmoves[i][1][2];
-            appendMove(player, co, tiles, score);
+            skrafl.moveList.appendMove(player, co, tiles, score);
          }
       }
       /* Update the bag */
@@ -1814,7 +1997,7 @@ function confirmExchange(yes) {
          rackTile.removeClass("xchg").off("click.xchg");
       }
    }
-   initRackDraggable(true);
+   skrafl.moveMechanics.initRackDraggable(true);
    if (yes && exch.length > 0) {
       // The user wants to exchange tiles: submit an exchange move
       sendMove('exch=' + exch);
@@ -1832,7 +2015,7 @@ function submitExchange(btn) {
       $("div.exchange").css("visibility", "visible");
       showingDialog = true;
       updateButtonState();
-      initRackDraggable(false);
+      skrafl.moveMechanics.initRackDraggable(false);
       /* Disable all other actions while panel is shown */
       /* Put the rack in exchange mode */
       for (var i = 1; i <= RACK_SIZE; i++) {
@@ -2199,23 +2382,6 @@ function handleChatEnter(ev) {
       ev.preventDefault();
       sendChatMsg();
    }
-}
-
-function decodeTimestamp(ts) {
-   // Parse and split a timestamp string from the format YYYY-MM-DD HH:MM:SS
-   return {
-      year: parseInt(ts.substr(0, 4)),
-      month: parseInt(ts.substr(5, 2)),
-      day: parseInt(ts.substr(8, 2)),
-      hour: parseInt(ts.substr(11, 2)),
-      minute: parseInt(ts.substr(14, 2)),
-      second: parseInt(ts.substr(17, 2))
-   };
-}
-
-function timeDiff(dtFrom, dtTo) {
-   // Return the difference between two JavaScript time points, in seconds
-   return Math.round((dtTo - dtFrom) / 1000.0);
 }
 
 function showChatMsg(player_index, msg, ts) {
@@ -2666,16 +2832,17 @@ function channelOnClose() {
    socket = null;
 }
 
-function initSkrafl(jQuery) {
+function initSkrafl(debug) {
+    skrafl = new SkraflGame(debug);
    /* Called when the page is displayed or refreshed */
 
    // Initialize the game timing information (duration, elapsed time)
    var igt = initialGameTime();
+   console.log("Initial game time=" + igt.duration);
 
    if (igt.duration > 0)
       // This is a timed game: move things around and show the clock
-      showClock();
-
+      skrafl.showClock();
    if (gameUsesNewBag())
       // Switch tile scores to the new bag
       TILESCORE = NEW_TILESCORE;
@@ -2686,8 +2853,10 @@ function initSkrafl(jQuery) {
       // Restore previous tile positions, if saved
       restoreTiles();
       // Prepare drag-and-drop
-      initRackDraggable(true);
+      skrafl.moveMechanics.initRackDraggable(true);
       initDropTargets();
+      // Quick editing
+      initQuickEdits();
    }
    initBag();
    if (localPlayer() === 1) {
@@ -2710,7 +2879,7 @@ function initSkrafl(jQuery) {
    /* Bind Esc key to a function to reset the rack */
    Mousetrap.bind('esc', resetRack);
    /* Bind Backspace key to a function to rescramble the rack */
-   Mousetrap.bind('backspace', rescrambleRack);
+   Mousetrap.bind('backspace', skrafl.rack.rescramble);
    /* Bind pinch gesture to a function to reset the rack */
    /* $('body').bind('pinchclose', resetRack); */
 
