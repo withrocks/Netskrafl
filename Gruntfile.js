@@ -36,6 +36,23 @@ module.exports = function (grunt) {
          }
       },
 
+      concat: {
+        options: {
+        },
+        dist: {
+            src: ['static/js/Util.js',
+                  'static/js/Board.js',
+                  'static/js/Clock.js',
+                  'static/js/MoveList.js',
+                  'static/js/MoveMechanics.js',
+                  'static/js/Rack.js',
+                  'static/js/ScoreBoard.js',
+                  'static/js/SkraflGame.js',
+                  'static/netskrafl.js'],
+            dest: 'static/netskrafl-rf.js',
+        }
+      },
+
       uglify: {
          netskrafl_js: {
             src: 'static/netskrafl.js',
@@ -71,8 +88,11 @@ module.exports = function (grunt) {
          }
       },
 
-
       watch: {
+         concat: {
+            files: ['<%= concat.files %>'],
+            tasks: ['concat']
+         },
          jshint: {
             files: ['static/netskrafl.js', 'static/main.js', 'static/wait.js'],
             tasks: 'jshint',

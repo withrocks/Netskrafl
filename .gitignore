@@ -27,6 +27,9 @@ static/netskrafl.min.js
 static/main.min.js
 static/wait.min.js
 
+# Concatenated JS (temporary):
+static/netskrafl-rf.js
+
 # Python package folders required for AppEngine
 flask/
 werkzeug/
