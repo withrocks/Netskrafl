@@ -42,6 +42,7 @@ module.exports = function (grunt) {
                   'static/js/channel.js',
                   'static/js/ajax.js',
                   'static/js/ui.js',
+                  'static/js/netskrafl-blank.js',
                   'static/js/netskrafl.js'],
             dest: 'static/netskrafl.js',
         },
