@@ -958,46 +958,18 @@ function prepareBlankDialog() {
    $("#blank-close").click("", closeBlankDialog);
 }
 
-// TODO: Move to file move.js
+// TODO: Move to move.js
 var elementDragged = null; /* The element being dragged with the mouse */
 var tileSelected = null; /* The selected (single-clicked) tile */
 var targetSquareSelected = null; /* The target square selected when in typing mode */
-
-var INPUT_STATE_NONE = 0;
-var INPUT_STATE_DRAGGING = 1;
-var INPUT_STATE_SINGLE_CLICKING = 2;
-var INPUT_STATE_TYPING_H = 3;
-var INPUT_STATE_TYPING_V = 4;
-
-var inputState = INPUT_STATE_NONE;
 var showingDialog = false; /* Is a modal dialog banner being shown? */
 var exchangeAllowed = true; /* Is an exchange move allowed? */
-
-function setInputState(state) {
-    // Always reset the input state via this method only
-    console.log("Setting input state: " + inputState + "=>" + state);
-    inputState = state;
-
-    if (inputState == INPUT_STATE_NONE) {
-        // Reset every state variable, no matter if it was set or not:
-        selectTile(null);
-        elementDragged = null;
-        tileSelected = null;
-    }
-    else if (inputState == INPUT_STATE_DRAGGING) {
-        // Remove selection, if any
-        selectTile(null);
-    }
-}
-
-function assignGenericClickEvent() {
-}
 
 function moveSelectedTile(sq) {
    // Move the tileSelected to the target square
    if (sq.firstChild === null) {
       moveTile(tileSelected, sq);
-      setInputState(0);
+      setInputState(INPUT_STATE_NONE);
    }
 }
 
@@ -1026,25 +998,38 @@ function selectTile(elem) {
       // Changing the selection
       if (tileSelected !== null)
          $(tileSelected).removeClass("sel");
+
       tileSelected = elem;
       if (tileSelected !== null) {
-         $(tileSelected).addClass("sel");
-         setInputState(INPUT_STATE_SINGLE_CLICKING);
+          if (inputState === INPUT_STATE_TYPING_V ||
+              inputState === INPUT_STATE_TYPING_H) {
+             // User is moving from the rack in 'typing' mode:
+             moveToTypingLine(elem);
+          }
+          else {
+             $(tileSelected).addClass("sel");
+             setInputState(INPUT_STATE_SINGLE_CLICKING);
+          }
       }
    }
+
    if (tileSelected !== null) {
       // We have a selected tile: show a red square around
       // drop targets for it
       $("table.board td.ui-droppable").hover(
          function() { selOver(this); },
          function() { selOut(this); }
-      ).click(
-         function() { moveSelectedTile(this); }
       );
+
+      // Clicks will be handled by the generic click event (which
+      // also handles other types of clicks on the squares)
+      /*.click(
+         function() { moveSelectedTile(this); }
+      );*/
    }
    else {
       // No selected tile: no hover
-      $("table.board td.ui-droppable").off("mouseenter mouseleave click").removeClass("sel");
+      $("table.board td.ui-droppable").off("mouseenter mouseleave").removeClass("sel");
    }
 }
 
@@ -1142,119 +1127,6 @@ function initDropTarget(elem) {
       );
 }
 
-var HORIZONTAL = 1;
-var VERTICAL = 2;
-
-/*
-Supports enumerating over a certain number of squares,
-with the possibility of jumping if occupied
-
-  start: start from this square (e.g. A1)
-  max: Enumerate at most these items
-  direction: HORIZONTAL or VERTICAL
-  jumpIfOccupied: Ignore occupied squares
-  callback: Callback for yielding
-*/
-function enumerateSquares(start, max, direction, jumpIfOccupied, callback) {
-    var enumerateCount = 0;
-    var vector = toVector(start);
-    var row = vector.row;
-    var col = vector.col;
-
-    var moveVector;
-    if (direction == HORIZONTAL)
-        moveVector = {row: 0, col: 1};
-    else
-        moveVector = {row: 1, col: 0};
-
-    // While loop since the conditions will become a bit more complex with jumps
-    while (true) {
-        if (enumerateCount == max) {
-            console.log("Enumerated the requested number of items") ;
-            break;
-        }
-        else if (col > BOARD_SIZE || row > BOARD_SIZE) {
-            console.log("Off the board, exiting");
-            break;
-        }
-
-        var currentId = coord(row, col);
-        var tile = tileAt(row, col);
-
-        // Move (doing it here to ensure a break out of the while loop)
-        row += moveVector.row;
-        col += moveVector.col;
-
-        if (jumpIfOccupied) {
-            var current = $("#" + currentId);
-
-            if (tile !== null) {
-                console.log("Jumping...");
-                continue;
-            }
-        }
-
-        // Yield the current:
-        callback(currentId);
-        enumerateCount++;
-    }
-}
-
-// Returns an array with squares that can be filled with tiles
-function validInputLine(start, direction) {
-    var ret = new Array();
-    enumerateSquares(start, 7, direction, true, function(id) {
-        ret.push(id);
-    });
-    return ret;
-}
-
-// TODO: Fix indent!
-// TODO: Move to separate class and encapsulate in a prototype
-function onBoardSquareClicked() {
-    function clearTyping() {
-       $(".typing").removeClass("typing")
-            .removeClass("typing-vertical")
-            .removeClass("typing-horizontal")
-            .removeClass("typing-start")
-            .removeClass("typing-end");
-    }
-
-    function selectInputLine(startSquare, order) {
-       var inputLine = validInputLine(startSquare, order);
-       var length = inputLine.length;
-       for (index in inputLine) {
-          var id = inputLine[index];
-          var detailClass = order == HORIZONTAL ? "typing-horizontal" :
-            "typing-vertical";
-
-          var item = $("#" + id);
-          item.addClass("typing").addClass(detailClass);
-          if (index == 0)
-            item.addClass("typing-start");
-          else if (index == length - 1)
-            item.addClass("typing-end");
-       }
-    }
-
-    console.log("clicked" + inputState);
-    if (inputState == INPUT_STATE_NONE) {
-       setInputState(INPUT_STATE_TYPING_H);
-       clearTyping();
-       selectInputLine(this.id, HORIZONTAL);
-    }
-    else if (inputState == INPUT_STATE_TYPING_H) {
-       setInputState(INPUT_STATE_TYPING_V);
-       clearTyping();
-       selectInputLine(this.id, VERTICAL);
-    }
-    else if (inputState == INPUT_STATE_TYPING_V) {
-       setInputState(INPUT_STATE_NONE);
-       clearTyping();
-       console.log("Clearing typing state");
-    }
-}
-
 function initDropTargets() {
    /* All board squares are drop targets */
    var x, y, sq;
@@ -1276,6 +1148,7 @@ function initDropTargets() {
 }
 
 function moveTile(src, target) {
+   console.log("moveTile, src=" + src + " target=" + target);
    // src is a DIV; target is a TD
    var ok = true;
    var parentid = src.parentNode.id;
@@ -1662,6 +1535,7 @@ function resetRack(ev) {
    });
    saveTiles();
    updateButtonState();
+   setInputState(INPUT_STATE_NONE);
    return true;
 }
 
