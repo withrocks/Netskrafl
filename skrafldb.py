@@ -348,6 +348,27 @@ class UserModel(ndb.Model):
         return result
 
 
+class Challenge:
+    def __init__(self, player_id, player_rating, duration, bag_version, no_cheat,
+                 created_at=None):
+        """
+        Initializes a Challenge object
+
+        :param player_id: The ID of the player
+        :param player_rating: The player's ELO rating at the time
+        :param duration: The duration of the game in minutes, 0=no time limit
+        :param bag_version: The version of the bag being used
+        :param no_cheat: The user has claimed that he will use no tools
+        :return: None
+        """
+        self.player_id = player_id
+        self.player_rating = player_rating
+        self.duration = duration
+        self.bag_version = bag_version
+        self.no_cheat = no_cheat
+        self.created_at = created_at
+
+
 class MoveModel(ndb.Model):
     """ Models a single move in a Game """
 
@@ -600,6 +621,57 @@ class FavoriteModel(ndb.Model):
                 return
             fmk.delete()
 
+
+class OpenChallengeModel(ndb.Model):
+    """
+    Models an open challenge.
+
+    The properties of the challenge are kept in the ancestor key,
+    since they will always be queried by that key.
+    """
+    user = ndb.KeyProperty(kind=UserModel)
+    timestamp = ndb.DateTimeProperty(auto_now_add=True)
+    elo = ndb.IntegerProperty()  # User's elo at the time of creation
+
+    # TODO: We need to add the challenge created to the user's model, so he
+    #       can cancel it.
+
+    @classmethod
+    def add(cls, user_key, user_elo, duration, bag_version, no_cheat):
+        """
+        :param user_key: User creating the challenge
+        :param user_elo: The rating of the user at the point of adding
+        :param duration: Duration in minutes
+        :param bag_version: The version of the bag being used
+        :param no_cheat: The user will not use any tools to help during play
+        :return:
+        """
+        # TODO: Discuss, could also be one root key composed out of the parameters
+        parent = ndb.Key("ChallengeDuration", duration,
+                         "Bag", bag_version,
+                         "NoCheat", no_cheat)
+        open_challenge = OpenChallengeModel(parent,
+                                            user=user_key,
+                                            user_elo=user_elo)
+        open_challenge.put()
+
+    @classmethod
+    def list_issued(cls, user_id, max_len = 20):
+        """ Query for a list of challenges issued by a particular user """
+        assert user_id is not None
+        if user_id is None:
+            return
+        k = ndb.Key(UserModel, user_id)
+        # List issued challenges in ascending order by timestamp (oldest first)
+        q = cls.query(ancestor = k).order(ChallengeModel.timestamp)
+
+        def ch_callback(cm):
+            """ Map an issued challenge to a tuple of useful info """
+            id0 = None if cm.destuser is None else cm.destuser.id()
+            return (id0, cm.prefs, cm.timestamp)
+
+        for cm in q.fetch(max_len):
+            yield ch_callback(cm)
 
 class ChallengeModel(ndb.Model):
     """ Models a challenge issued by a user to another user """
