@@ -630,6 +630,7 @@ class Error:
     GAME_NOT_FOUND = 16
     GAME_NOT_OVERDUE = 17
     SERVER_ERROR = 18
+    ARGUMENT_ERROR = 19
     # Insert new error codes above this line
     # GAME_OVER is always last and with a fixed code (also used in netskrafl.js)
     GAME_OVER = 99

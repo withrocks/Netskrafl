@@ -348,27 +348,6 @@ class UserModel(ndb.Model):
         return result
 
 
-class Challenge:
-    def __init__(self, player_id, player_rating, duration, bag_version, no_cheat,
-                 created_at=None):
-        """
-        Initializes a Challenge object
-
-        :param player_id: The ID of the player
-        :param player_rating: The player's ELO rating at the time
-        :param duration: The duration of the game in minutes, 0=no time limit
-        :param bag_version: The version of the bag being used
-        :param no_cheat: The user has claimed that he will use no tools
-        :return: None
-        """
-        self.player_id = player_id
-        self.player_rating = player_rating
-        self.duration = duration
-        self.bag_version = bag_version
-        self.no_cheat = no_cheat
-        self.created_at = created_at
-
-
 class MoveModel(ndb.Model):
     """ Models a single move in a Game """
 
@@ -621,7 +600,6 @@ class FavoriteModel(ndb.Model):
                 return
             fmk.delete()
 
-
 class OpenChallengeModel(ndb.Model):
     """
     Models an open challenge.
@@ -632,28 +610,43 @@ class OpenChallengeModel(ndb.Model):
     user = ndb.KeyProperty(kind=UserModel)
     timestamp = ndb.DateTimeProperty(auto_now_add=True)
     elo = ndb.IntegerProperty()  # User's elo at the time of creation
+    challenge_type = ndb.StringProperty(indexed=True)
 
     # TODO: We need to add the challenge created to the user's model, so he
     #       can cancel it.
 
+    @staticmethod
+    def challenge_type_key(duration, bag_version, no_cheat):
+        return ",".join(map(str, [duration, bag_version, no_cheat]))
+
     @classmethod
-    def add(cls, user_key, user_elo, duration, bag_version, no_cheat):
+    def add(cls, user_model, user_elo, duration, bag_version, no_cheat):
         """
-        :param user_key: User creating the challenge
+        :param user_model: User creating the challenge
         :param user_elo: The rating of the user at the point of adding
         :param duration: Duration in minutes
         :param bag_version: The version of the bag being used
         :param no_cheat: The user will not use any tools to help during play
-        :return:
+        :return: The challenge_type added if this is a newly added type. If it already
+        existed, None is returned.
         """
-        # TODO: Discuss, could also be one root key composed out of the parameters
-        parent = ndb.Key("ChallengeDuration", duration,
-                         "Bag", bag_version,
-                         "NoCheat", no_cheat)
-        open_challenge = OpenChallengeModel(parent,
-                                            user=user_key,
-                                            user_elo=user_elo)
-        open_challenge.put()
+        # First, ensure that we have this type:
+        challenge_type = cls.challenge_type_key(duration, bag_version, no_cheat)
+        # TODO: Is a parent key a good idea?
+        key_name = "{}/{}".format(user_model.id(), challenge_type)
+        key = ndb.Key("OpenChallengeModel", key_name)
+        open_challenge = key.get()
+
+        if open_challenge:
+            return None
+        else:
+            # TODO: The user id is already in the key, skip property?
+            open_challenge = OpenChallengeModel(key=key,
+                                                user=user_model,
+                                                elo=user_elo,
+                                                challenge_type=challenge_type)
+            open_challenge.put()
+            return challenge_type
 
     @classmethod
     def list_issued(cls, user_id, max_len = 20):

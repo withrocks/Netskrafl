@@ -988,6 +988,31 @@ def challenge():
     return jsonify(result = Error.LEGAL)
 
 
+from challenge import ChallengeService
+
+@app.route("/openchallenge", methods=['POST'])
+def openchallenge():
+    user = User.current()
+    if user is None:
+        # We must have a logged-in user
+        return jsonify(result=Error.LOGIN_REQUIRED)
+
+    try:
+        bag_version = int(request.form['bag_version'])
+        duration = int(request.form['duration'])
+        no_cheat = bool(request.form['no_cheat'])
+    except KeyError:
+        # TODO:
+        from flask import abort
+        abort(400)
+        #return jsonify(result=Error.ARGUMENT_ERROR)
+
+    # TODO: Have this on the context in Flask:
+    challenge_svc = ChallengeService()
+    challenge_svc.add_challenge(user, duration, bag_version, no_cheat)
+    return jsonify(result=Error.LEGAL)
+
+
 @app.route("/setuserpref", methods=['POST'])
 def setuserpref():
     """ Set a user preference """
