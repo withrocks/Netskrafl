@@ -600,6 +600,23 @@ class FavoriteModel(ndb.Model):
                 return
             fmk.delete()
 
+
+class OpenChallengeTypeModel(ndb.Model):
+    """
+    Represents a particular type of challenge. Contains a
+    count of all such challenges in the system, so they don't have
+    to be looked up separately
+    """
+    count = ndb.IntegerProperty(required=True)
+
+    @classmethod
+    def get_all(cls):
+        return cls.query()
+
+    @classmethod
+    def get_all_having_at_least(cls, min_challenges):
+        return cls.query(OpenChallengeTypeModel.count >= min_challenges)
+
 class OpenChallengeModel(ndb.Model):
     """
     Models an open challenge.
@@ -610,16 +627,28 @@ class OpenChallengeModel(ndb.Model):
     user = ndb.KeyProperty(kind=UserModel)
     timestamp = ndb.DateTimeProperty(auto_now_add=True)
     elo = ndb.IntegerProperty()  # User's elo at the time of creation
-    challenge_type = ndb.StringProperty(indexed=True)
+
+    @classmethod
+    def get_by_challenge_type(cls, key):
+        return cls.query(ancestor=key).order(OpenChallengeModel.elo)
 
     # TODO: We need to add the challenge created to the user's model, so he
     #       can cancel it.
-
-    @staticmethod
-    def challenge_type_key(duration, bag_version, no_cheat):
-        return ",".join(map(str, [duration, bag_version, no_cheat]))
+    @classmethod
+    def exists(cls, user_model, user_elo, duration, bag_version, no_cheat):
+        type_key_name = ",".join(map(str, [duration, bag_version, no_cheat]))
+        type_key = ndb.Key(OpenChallengeTypeModel, type_key_name)
+        open_challenge_key = ndb.Key(OpenChallengeModel,
+                                     user_model.id(),
+                                     parent=type_key)
+        # TODO: Not necessary to get the entity back
+        existing = open_challenge_key.get()
+        logging.info("Checking if key exists for {}, {}".format(open_challenge_key,
+                                                                existing))
+        return existing is not None
 
     @classmethod
+    @ndb.transactional(xg=True)  # TODO: transactional!
     def add(cls, user_model, user_elo, duration, bag_version, no_cheat):
         """
         :param user_model: User creating the challenge
@@ -630,30 +659,30 @@ class OpenChallengeModel(ndb.Model):
         :return: The challenge_type added if this is a newly added type. If it already
         existed, None is returned.
         """
-        # First, ensure that we have this type:
-        challenge_type = cls.challenge_type_key(duration, bag_version, no_cheat)
-        # TODO: Is a parent key a good idea?
-        key_name = "{}/{}".format(user_model.id(), challenge_type)
-        key = ndb.Key("OpenChallengeModel", key_name)
-        open_challenge = key.get()
 
-        if open_challenge:
-            return None
-        else:
-            # TODO: The user id is already in the key, skip property?
-            open_challenge = OpenChallengeModel(key=key,
-                                                user=user_model,
-                                                elo=user_elo,
-                                                challenge_type=challenge_type)
-            open_challenge.put()
-            return challenge_type
+        type_key_name = ",".join(map(str, [duration, bag_version, no_cheat]))
+        type_key = ndb.Key(OpenChallengeTypeModel, type_key_name)
+
+        open_challenge_type = type_key.get()
+        if not open_challenge_type:
+            open_challenge_type = OpenChallengeTypeModel(count=0, key=type_key)
+
+        open_challenge_type.count += 1
+        open_challenge_type_key = open_challenge_type.put()
+
+        # Add the actual challenge as a child of the type:
+        open_challenge_key = ndb.Key(OpenChallengeModel,
+                                     user_model.id(),
+                                     parent=open_challenge_type_key)
+        open_challenge = OpenChallengeModel(key=open_challenge_key,
+                                            user=user_model,
+                                            elo=user_elo)
+        open_challenge.put()
+
 
     @classmethod
-    def list_issued(cls, user_id, max_len = 20):
+    def count_all_types(cls):
         """ Query for a list of challenges issued by a particular user """
-        assert user_id is not None
-        if user_id is None:
-            return
         k = ndb.Key(UserModel, user_id)
         # List issued challenges in ascending order by timestamp (oldest first)
         q = cls.query(ancestor = k).order(ChallengeModel.timestamp)

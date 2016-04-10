@@ -29,6 +29,7 @@ from skraflgame import Game
 app = netskrafl.app
 
 
+# NOTE: Why is this not a GET?
 @app.route("/admin/usercount", methods=['POST'])
 def admin_usercount():
     """ Return a count of UserModel entities """

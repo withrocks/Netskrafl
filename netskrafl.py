@@ -48,6 +48,7 @@ from skraflgame import User, Game
 from skrafldb import Context, UserModel, GameModel,\
     FavoriteModel, ChallengeModel, ChannelModel, RatingModel, ChatModel,\
     ZombieModel
+from challenge import ChallengeService
 
 
 # Standard Flask initialization
@@ -987,11 +988,24 @@ def challenge():
 
     return jsonify(result = Error.LEGAL)
 
+# TODO: admin interface
+@app.route("/openchallengesstatus", methods=['GET'])
+def openchallengesstatus():
+    challenge_svc = ChallengeService()
+    return jsonify(challenge_svc.status())
 
-from challenge import ChallengeService
+# TODO: Move to admin interface
+# TODO: Excute the service through a task
+@app.route("/matchopenchallenges", methods=['POST'])
+def matchopenchallenges():
+    challenge_svc = ChallengeService()
+    challenge_svc.match_all()
+    return jsonify(result=Error.LEGAL)
+
 
 @app.route("/openchallenge", methods=['POST'])
 def openchallenge():
+    from challenge import ChallengeService, OpenChallengeAlreadyExists
     user = User.current()
     if user is None:
         # We must have a logged-in user
@@ -1001,16 +1015,22 @@ def openchallenge():
         bag_version = int(request.form['bag_version'])
         duration = int(request.form['duration'])
         no_cheat = bool(request.form['no_cheat'])
-    except KeyError:
+    except KeyError as e:
         # TODO:
+        print e
         from flask import abort
         abort(400)
-        #return jsonify(result=Error.ARGUMENT_ERROR)
 
-    # TODO: Have this on the context in Flask:
     challenge_svc = ChallengeService()
-    challenge_svc.add_challenge(user, duration, bag_version, no_cheat)
-    return jsonify(result=Error.LEGAL)
+    try:
+        challenge_svc.add_challenge(user, duration, bag_version, no_cheat)
+        return jsonify(result=Error.LEGAL)
+    except OpenChallengeAlreadyExists:
+        logger = logging.getLogger(__name__)
+        logger.error("MOTHER")
+        # TODO: Don't return 200!
+        return jsonify(result=Error.ALREADY_REGISTERED), 400
+
 
 
 @app.route("/setuserpref", methods=['POST'])

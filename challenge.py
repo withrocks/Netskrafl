@@ -11,7 +11,7 @@ Design
 * The challenge object is saved in the datastore. There is an index for the challenge
   object's properties, so `fetch all challenges with bag_version=?, duration=?, no_cheat=?`.
   will be fast.
-* To minimize reads, the count for the challenge type is updated in memcache:
+* Furthermore, to minimize reads, the count for the challenge type is updated in memcache:
   If the user adds (bag_version=1,duration=15) we read the cache key "challenges",
   using Compare-And-Set (ensures no race conditions). This object is a regular
   Python dictionary object, which contains key/value pairs of the form
@@ -40,6 +40,19 @@ class ChallengeService:
     def __init__(self, logger=None):
         self.logger = logger or logging.getLogger(__name__)
 
+    def status(self, cache=True, datastore=False):
+        """Fetches the status of the challenges"""
+        ret = dict()
+        if cache:
+            client = memcache.Client()
+            ret["cached"] = client.gets(self.CACHE_KEY)
+
+        if datastore:
+            OpenChallengeModel.count_all_types()
+
+
+        return ret
+
     def count_challenges(self):
         """Counts all open challenges in the datastore"""
         return dict()
@@ -58,13 +71,48 @@ class ChallengeService:
         client.set(self.CACHE_KEY, fresh)
         return fresh
 
-    @ndb.transactional
+    def get_cache_counts(self):
+        """
+        Returns the challenge type counts from the counts,
+        refreshing them if they don't already exist
+        :return:
+        """
+        client = memcache.Client()
+        counter_dict = client.gets(self.CACHE_KEY)
+        if counter_dict is None:
+            counter_dict = self.refresh_memcache_count()
+        return counter_dict
+
+    def match_all(self):
+        """
+        Matches all outstanding challenges.
+
+        The matching algorithm is rather naive. It doesn't minimize the difference in
+        ELO ratings (for simplicity, since such an algorithm would also have to ensure
+        that outliers would still be matched), but instead it:
+          * orders challenges in rating order, either asc. or desc. (randomly chosen, so that it's as likely that
+            it's as likely that the lowest rated challenge get's matched as the highest rated one, since in the
+            case when the number of challenges is odd, the last item will not get matched)
+          * visits the first pair in the list, matches it, then goes on to the next pair after that until
+            there is zero or one item left.
+        :return:
+        """
+        # TODO: This should come from a cache to make it as cheap as possible
+        # Also: ensure that when removing from the model, the automated cache gets updated
+        from skrafldb import OpenChallengeTypeModel
+        challenge_types = OpenChallengeTypeModel.get_all_having_at_least(2)
+        for challenge_type in challenge_types:
+            challenges = OpenChallengeModel.get_by_challenge_type(challenge_type.key)
+            print challenge_type.key, challenges
+            for challenge in challenges:
+                print challenge
+
     def add_challenge(self, user, duration, bag_version, no_cheat):
         """
         Adding a new challenge object adds the challenge to:
           - NDB (OpenChallengeModel)
           - memcache: Maintains counts to limit access to the backend
-            (since the open challenges status will be challenged a lot)
+            (since the open challenges status will be queried a lot, e.g. every 5 secs)
 
         The method uses an ndb transaction to ensure that if another
         process changes the same ndb key, at the same time, it will fail.
@@ -77,34 +125,15 @@ class ChallengeService:
         # If it fails in all three, a TransactionFailedError is thrown.
         # Decide if we want to throw another exception instead
         self.logger.debug("Creating a challenge: {}".format(duration))
-        user_id = ndb.Key(UserModel, user.id())
-        challenge_type = OpenChallengeModel.add(user_id,
-                                       user.human_elo(), duration, bag_version, no_cheat)
+        user_key = ndb.Key(UserModel, user.id())
 
-        if challenge_type:
-            # This is a newly added challenge type by this user. Update the counters.
+        if not OpenChallengeModel.exists(user_key, user.human_elo(), duration,
+                                         bag_version, no_cheat):
+            OpenChallengeModel.add(user_key,
+                                   user.human_elo(), duration, bag_version, no_cheat)
+        else:
+            raise OpenChallengeAlreadyExists()
 
-            # Update the memcache key for this, note that we use the compare-and-set
-            # operation and we only increase the count so it should be in synch
-            # with changes to other challenges.
-            client = memcache.Client()
-            for x in xrange(0, 10):
-                # Retry only a few times. If this fails, we'll simply have
-                # one too few items counted. This could be corrected by
-                # a separate task which cleans up (calculates the actual state)
-                # once every x minutes (TODO)
-                print "Trying to set key for {}".format(challenge_type)
-                counter_dict = client.gets(self.CACHE_KEY)
-                if counter_dict is None:
-                    counter_dict = self.refresh_memcache_count()
 
-                # The counter_dict is a Python dictionary, containing all
-                # challenge types with known counts:
-                if challenge_type not in counter_dict:
-                    counter_dict[challenge_type] = 0
-                counter_dict[challenge_type] += 1
-
-                if client.cas(self.CACHE_KEY, counter_dict):
-                    print "Successfully added the key"
-                    break
-
+class OpenChallengeAlreadyExists(Exception):
+    pass

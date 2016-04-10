@@ -98,6 +98,11 @@ indexes:
   - name: over
   - name: ts_last_move
 
+- kind: OpenChallengeModel
+  ancestor: yes
+  properties:
+  - name: elo
+
 - kind: RatingModel
   properties:
   - name: kind
