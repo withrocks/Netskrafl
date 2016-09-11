@@ -3,7 +3,7 @@
 # Does two runs of dawgbuilder in a row
 set -e
 
-for f in resource1 resource2
+for f in resources1 resources2
 do
     time python dawgbuilder.py > resources/lastrun.txt 2>&1
     if [ -d $f ]; then
