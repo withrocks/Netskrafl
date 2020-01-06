@@ -55,6 +55,7 @@ from skrafldb import Context, UserModel, GameModel, \
     ZombieModel, PromoModel
 import billing
 import firebase
+from challenge import ChallengeService
 
 # Standard Flask initialization
 
@@ -66,6 +67,8 @@ if running_local:
     logging.info(u"Netskrafl app running with DEBUG set to True")
 
 app.config['DEBUG'] = running_local
+
+challenge_svc = ChallengeService()
 
 # Read secret session key from file
 with open(os.path.abspath(os.path.join("resources", "secret_key.bin")), "rb") as f:
@@ -778,7 +781,7 @@ def start():
     ok = u"upphitun" in wdb # Use a random word to check ('upphitun' means warm-up)
     logging.info(u"Start/warmup, instance {0}, ok is {1}".format(
         os.environ.get("INSTANCE_ID", ""), ok))
-    return "", 200 # jsonify(ok = ok)
+    return "", 200
 
 
 @app.route("/_ah/stop")
@@ -841,6 +844,12 @@ def submitmove():
             break
     return result
 
+@app.route("/openchallenge", methods=['POST'])
+def openchallenge():
+    """ Creates an open challenge """
+    user_id = User.current_id()
+    challenge_svc.request(user_id, {})
+    return jsonify(ok = True)
 
 @app.route("/gamestate", methods=['POST'])
 def gamestate():

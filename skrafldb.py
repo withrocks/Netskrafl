@@ -607,6 +607,17 @@ class FavoriteModel(ndb.Model):
             fmk.delete()
 
 
+class OpenChallengeModel(ndb.Model):
+    """ Models an open challenge by a user """
+
+    # The parameters of the challenge (time, bag type, etc.)
+    prefs = ndb.JsonProperty()
+
+    # The time of issuance. This must be indexed as challenges are
+    # fetched based on timestamps when matching.
+    timestamp = ndb.DateTimeProperty(auto_now_add = True)
+
+
 class ChallengeModel(ndb.Model):
     """ Models a challenge issued by a user to another user """
 
