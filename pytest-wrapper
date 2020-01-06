@@ -1,0 +1,33 @@
+#!/usr/bin/env python
+
+"""
+A test runner for netskrafl. Forwards all arguments to `pytest` but
+adds all required libraries for testing GAE code.
+"""
+
+import pytest
+import sys
+import os
+from distutils.spawn import find_executable
+sys.path.insert(1, os.path.join(os.getcwd(), 'lib'))
+
+exe_path = find_executable("gcloud")
+if not exe_path:
+    raise AssertionError("The executable `gcloud` was not found in path")
+
+path, _ = os.path.split(exe_path)  # Remove the exe
+path, _ = os.path.split(path)  # Remove the bin dir 
+google_appengine_root = os.path.join(path, "platform", "google_appengine")
+
+# TODO: There must be a cleaner way to do this...
+sys.path.insert(1, google_appengine_root)
+sys.path.insert(1, os.path.join(google_appengine_root, "lib", "webob-1.2.3"))
+sys.path.insert(1, os.path.join(google_appengine_root, "lib", "webapp2-2.5.2"))
+
+import fixtures  # noqa, imported for side effects only
+
+# NOTE: Initializing stubs here in the test runner
+# to make sure that we can import modules like `netskrafl` on module level
+# in the tests.
+pytest.main(sys.argv[1:])
+
